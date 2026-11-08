@@ -24,7 +24,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
+import static io.netty.handler.codec.http2.Http2CodecUtil.MAX_HEADER_TABLE_SIZE;
 import static io.netty.handler.codec.http2.Http2TestUtil.newTestEncoder;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -72,6 +74,44 @@ public class DefaultHttp2HeadersEncoderTest {
                 }
             }
         });
+    }
+
+    @Test
+    public void peerMaxHeaderTableSizeShouldBeCapped() throws Http2Exception {
+        DefaultHttp2HeadersEncoder defaultEncoder = new DefaultHttp2HeadersEncoder();
+        try {
+            // A peer advertising a huge SETTINGS_HEADER_TABLE_SIZE must not make the encoder use a huge table.
+            defaultEncoder.maxHeaderTableSize(MAX_HEADER_TABLE_SIZE);
+            assertEquals(64 * 64, defaultEncoder.maxHeaderTableSize());
+        } finally {
+            defaultEncoder.close();
+        }
+    }
+
+    @Test
+    public void repeatedTableSizeChangesShouldNotBeBuffered() throws Http2Exception {
+        // A peer flooding SETTINGS frames with changing header table sizes must not make the encoder buffer
+        // one dynamic table size update per SETTINGS frame.
+        for (int i = 0; i < 100000; i++) {
+            encoder.maxHeaderTableSize(0);
+            encoder.maxHeaderTableSize(1000);
+        }
+        ByteBuf buf = Unpooled.buffer();
+        try {
+            encoder.encodeHeaders(3 /* randomly chosen */, EmptyHttp2Headers.INSTANCE, buf);
+            // Only the minimum (0) and the final (1000) table size updates are emitted.
+            assertEquals(4, buf.readableBytes());
+            assertEquals(0x20, buf.getUnsignedByte(0));
+            assertEquals(0x3f, buf.getUnsignedByte(1));
+            assertEquals(0xc9, buf.getUnsignedByte(2));
+            assertEquals(0x07, buf.getUnsignedByte(3));
+
+            buf.clear();
+            encoder.encodeHeaders(3 /* randomly chosen */, EmptyHttp2Headers.INSTANCE, buf);
+            assertEquals(0, buf.readableBytes());
+        } finally {
+            buf.release();
+        }
     }
 
     private static Http2Headers headers() {
