@@ -433,6 +433,27 @@ public final class HttpConversionUtil {
         final Http2Headers out = new DefaultHttp2Headers(validateHeaders, inHeaders.size());
         if (in instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) in;
+            if (request.method().equals(HttpMethod.CONNECT)) {
+                // https://datatracker.ietf.org/doc/html/rfc9112#section-3.2.3 defines the HTTP/1 CONNECT
+                // request-target as authority-form (host:port), which is the only valid request-target for
+                // CONNECT. Use it directly for :authority, ignoring any (potentially conflicting) Host header,
+                // and per https://datatracker.ietf.org/doc/html/rfc9113#section-8.5 omit :scheme and :path.
+                String authorityForm = request.uri();
+                if (authorityForm != null) {
+                    // CONNECT uses a special form of request target, unique to this method, consisting of only the
+                    // host and port number of the tunnel destination, separated by a colon per
+                    // https://www.rfc-editor.org/info/rfc9110/#name-connect
+                    if (authorityForm.isEmpty() || authorityForm.indexOf('@') >= 0 ||
+                            authorityForm.indexOf('/') >= 0) {
+                        throw new IllegalArgumentException("Invalid CONNECT request target: " + authorityForm);
+                    }
+                    out.authority(new AsciiString(authorityForm));
+                }
+                out.method(request.method().asciiName());
+                // Add the HTTP headers which have not been consumed above
+                toHttp2Headers(inHeaders, out);
+                return out;
+            }
             String host = inHeaders.getAsString(HttpHeaderNames.HOST);
             if (isOriginForm(request.uri()) || isAsteriskForm(request.uri())) {
                 out.path(new AsciiString(request.uri()));
