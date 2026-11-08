@@ -21,19 +21,24 @@ RUN yum install -y \
  zip
 
 
-# Downloading and installing SDKMAN!
-RUN curl -s "https://get.sdkman.io" | bash
-
 ARG java_version="8.0.302-zulu"
 ENV JAVA_VERSION $java_version
 
-# Installing Java removing some unnecessary SDKMAN files
-RUN bash -c "source $HOME/.sdkman/bin/sdkman-init.sh && \
-    yes | sdk install java $JAVA_VERSION && \
-    rm -rf $HOME/.sdkman/archives/* && \
-    rm -rf $HOME/.sdkman/tmp/*"
+# Installing Java straight from the SDKMAN! download broker into the usual SDKMAN! candidate layout.
+# The SDKMAN! installer itself fetches its CLI archives from GitHub release assets, which intermittently answer 504.
+RUN for i in 1 2 3 4 5 6 7 8 9 10; do \
+      curl --fail --location -sS -o /tmp/jdk.tar.gz \
+        "https://api.sdkman.io/2/broker/download/java/$JAVA_VERSION/linuxx64" && break; \
+      rm -f /tmp/jdk.tar.gz; sleep 20; \
+    done && \
+    mkdir -p /root/.sdkman/candidates/java/$JAVA_VERSION && \
+    tar -xzf /tmp/jdk.tar.gz -C /root/.sdkman/candidates/java/$JAVA_VERSION --strip-components=1 && \
+    ln -s /root/.sdkman/candidates/java/$JAVA_VERSION /root/.sdkman/candidates/java/current && \
+    rm -f /tmp/jdk.tar.gz && \
+    /root/.sdkman/candidates/java/current/bin/java -version
 
 RUN echo 'export JAVA_HOME="/root/.sdkman/candidates/java/current"' >> ~/.bashrc
+RUN echo 'export PATH="$JAVA_HOME/bin:$PATH"' >> ~/.bashrc
 RUN echo 'PATH=/jdk/bin:$PATH' >> ~/.bashrc
 
 # Cleanup

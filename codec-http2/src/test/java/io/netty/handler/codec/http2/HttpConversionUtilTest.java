@@ -262,6 +262,75 @@ public class HttpConversionUtilTest {
     }
 
     @Test
+    public void addHttp2ToHttpHeadersDeduplicatesMatchingAuthorityAndHost() throws Http2Exception {
+        Http2Headers inHeaders = new DefaultHttp2Headers();
+        inHeaders.authority("example.com");
+        inHeaders.add(HOST, "example.com");
+
+        HttpHeaders outHeaders = new DefaultHttpHeaders();
+
+        HttpConversionUtil.addHttp2ToHttpHeaders(5, inHeaders, outHeaders, HttpVersion.HTTP_1_1, false, true);
+        assertEquals(1, outHeaders.getAll(HOST).size());
+        assertEquals("example.com", outHeaders.get(HOST));
+    }
+
+    @Test
+    public void addHttp2ToHttpHeadersRejectsConflictingAuthorityAndHost() {
+        final Http2Headers inHeaders = new DefaultHttp2Headers();
+        inHeaders.authority("public.example.com");
+        inHeaders.add(HOST, "internal-admin.local");
+
+        final HttpHeaders outHeaders = new DefaultHttpHeaders();
+
+        Http2Exception exception = assertThrows(Http2Exception.class, new Executable() {
+            @Override
+            public void execute() throws Http2Exception {
+                HttpConversionUtil.addHttp2ToHttpHeaders(5, inHeaders, outHeaders, HttpVersion.HTTP_1_1, false, true);
+            }
+        });
+        assertEquals(Http2Error.PROTOCOL_ERROR, exception.error());
+        // No Host header should have leaked through in an inconsistent state.
+        assertFalse(outHeaders.contains(HOST) && outHeaders.getAll(HOST).size() > 1);
+    }
+
+    @Test
+    public void addHttp2ToHttpHeadersRejectsConflictingDuplicateHost() {
+        final Http2Headers inHeaders = new DefaultHttp2Headers();
+        inHeaders.add(HOST, "public.example.com");
+        inHeaders.add(HOST, "internal-admin.local");
+
+        final HttpHeaders outHeaders = new DefaultHttpHeaders();
+
+        Http2Exception exception = assertThrows(Http2Exception.class, new Executable() {
+            @Override
+            public void execute() throws Http2Exception {
+                HttpConversionUtil.addHttp2ToHttpHeaders(5, inHeaders, outHeaders, HttpVersion.HTTP_1_1, false, true);
+            }
+        });
+        assertEquals(Http2Error.PROTOCOL_ERROR, exception.error());
+        assertFalse(outHeaders.contains(HOST) && outHeaders.getAll(HOST).size() > 1);
+    }
+
+    @Test
+    public void addHttp2ToHttpHeadersRejectsConflictingDuplicateAuthority() {
+        // Header validation disabled, so the duplicate ':authority' is not rejected by DefaultHttp2Headers itself.
+        final Http2Headers inHeaders = new DefaultHttp2Headers(false);
+        inHeaders.add(Http2Headers.PseudoHeaderName.AUTHORITY.value(), "public.example.com");
+        inHeaders.add(Http2Headers.PseudoHeaderName.AUTHORITY.value(), "internal-admin.local");
+
+        final HttpHeaders outHeaders = new DefaultHttpHeaders();
+
+        Http2Exception exception = assertThrows(Http2Exception.class, new Executable() {
+            @Override
+            public void execute() throws Http2Exception {
+                HttpConversionUtil.addHttp2ToHttpHeaders(5, inHeaders, outHeaders, HttpVersion.HTTP_1_1, false, true);
+            }
+        });
+        assertEquals(Http2Error.PROTOCOL_ERROR, exception.error());
+        assertFalse(outHeaders.contains(HOST) && outHeaders.getAll(HOST).size() > 1);
+    }
+
+    @Test
     public void connectionSpecificHeadersShouldBeRemoved() {
         HttpHeaders inHeaders = new DefaultHttpHeaders();
         inHeaders.add(CONNECTION, "keep-alive");
