@@ -24,6 +24,7 @@ import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import java.util.Arrays;
 import java.util.Map.Entry;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
@@ -219,6 +220,155 @@ public class DefaultHttp2HeadersTest {
         assertTrue(headers.contains(name, value));
     }
 
+    @Test
+    public void headerValueValidationIsEnabledByDefault() {
+        for (char illegalChar : new char[] {'\0', '\n', '\r'}) {
+            String value = "fo" + illegalChar + "o";
+            assertValueRejected(new DefaultHttp2Headers(), value);
+            assertValueRejected(new DefaultHttp2Headers(true), value);
+            assertValueRejected(new DefaultHttp2Headers(true, 16), value);
+            assertValueRejected(new DefaultHttp2Headers(true, true, 16), value);
+        }
+        // A value that would split the header block once the headers are translated to HTTP/1.x.
+        assertValueRejected(new DefaultHttp2Headers(), "a\r\nTransfer-Encoding: chunked");
+        assertValueRejected(new DefaultHttp2Headers(), new AsciiString("a\r\nTransfer-Encoding: chunked"));
+    }
+
+    @Test
+    public void headerValueValidationCharacterSet() {
+        assertValue("", false);
+        for (char c = 0; c <= 0xFF; c++) {
+            // The first character must be a field-vchar (VCHAR / obs-text), later ones may also be SP / HTAB.
+            boolean firstIllegal = c < 0x21 || c == 0x7F;
+            boolean laterIllegal = c < 0x20 && c != 0x09 || c == 0x7F;
+            assertValue(c + "a", firstIllegal);
+            assertValue("a" + c, laterIllegal);
+            assertValue("a" + c + 'a', laterIllegal);
+        }
+        // Characters above 0xFF are not restricted for CharSequence values.
+        assertValue(new String(new char[] {'a', (char) 0x100, (char) 0xFFFF}), false);
+    }
+
+    @Test
+    public void headerValueValidationAppliesToAllMutators() {
+        Http2Headers headers = new DefaultHttp2Headers();
+        headers.add("name", "value");
+        try {
+            headers.add("name", Arrays.<CharSequence>asList("ok", "b\rad"));
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.add("name", "ok", "b\nad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.addObject("name", "b\nad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.set("name", "b\0ad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.set("other", Arrays.<CharSequence>asList("ok", "b\rad"));
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.set("other", "ok", "b\nad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.setObject("other", "b\nad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.setObject("other", "ok", "b\nad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.path("/b\r\nad");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        try {
+            headers.status("200\r\nSet-Cookie: injected");
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        assertNoIllegalValues(headers);
+
+        // Copying headers whose values were never validated must not bypass the validation of the target, neither
+        // when the names were not validated either nor when only the values were not validated.
+        Http2Headers[] sources = {
+                new DefaultHttp2Headers(false).add("name", "b\nad"),
+                new DefaultHttp2Headers(true, false, 16).add("name", "b\nad")
+        };
+        for (Http2Headers source : sources) {
+            Http2Headers target = new DefaultHttp2Headers();
+            try {
+                target.add(source);
+                fail();
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+            assertNoIllegalValues(target);
+            target = new DefaultHttp2Headers();
+            try {
+                target.set(source);
+                fail();
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+            assertNoIllegalValues(target);
+            target = new DefaultHttp2Headers();
+            try {
+                target.setAll(source);
+                fail();
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+            assertNoIllegalValues(target);
+        }
+
+        // Copying already validated headers keeps working.
+        Http2Headers target = new DefaultHttp2Headers();
+        target.add(new DefaultHttp2Headers().add("name", "value"));
+        assertEquals("value", target.get("name"));
+    }
+
+    @Test
+    public void headerValueValidationCanBeDisabled() {
+        Http2Headers headers = new DefaultHttp2Headers(false);
+        headers.add("name", "fo\r\n\0o");
+        assertEquals("fo\r\n\0o", headers.get("name").toString());
+        headers = new DefaultHttp2Headers(false, 16);
+        headers.add("name", " fo\no");
+        assertEquals(" fo\no", headers.get("name").toString());
+        // Value validation can still be controlled separately from name validation.
+        headers = new DefaultHttp2Headers(true, false, 16);
+        headers.add("name", "fo\no");
+        assertEquals("fo\no", headers.get("name").toString());
+        assertValueRejected(new DefaultHttp2Headers(false, true, 16), "fo\no");
+    }
+
     private static void verifyAllPseudoHeadersPresent(Http2Headers headers) {
         for (PseudoHeaderName pseudoName : PseudoHeaderName.values()) {
             assertNotNull(headers.get(pseudoName.value()));
@@ -235,6 +385,48 @@ public class DefaultHttp2HeadersTest {
                         " is after a non pseudo header " + lastNonPseudoName);
             }
         }
+    }
+
+    private static void assertValue(String value, boolean illegal) {
+        assertValue(value, illegal, value);
+        assertValue(new AsciiString(value), illegal, value);
+    }
+
+    private static void assertValue(CharSequence value, boolean illegal, String text) {
+        boolean rejected;
+        try {
+            new DefaultHttp2Headers().add("name", value);
+            rejected = false;
+        } catch (IllegalArgumentException e) {
+            rejected = true;
+        }
+        assertEquals(illegal, rejected, (illegal ? "value accepted: " : "value rejected: ") + hex(text));
+    }
+
+    private static void assertValueRejected(Http2Headers headers, CharSequence value) {
+        try {
+            headers.add("name", value);
+            fail("value accepted: " + hex(value));
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+        assertFalse(headers.contains("name"));
+    }
+
+    private static void assertNoIllegalValues(Http2Headers headers) {
+        for (Entry<CharSequence, CharSequence> entry : headers) {
+            String value = entry.getValue().toString();
+            assertTrue(value.indexOf('\n') < 0 && value.indexOf('\r') < 0 && value.indexOf('\0') < 0,
+                    "illegal value stored for " + entry.getKey() + ": " + hex(value));
+        }
+    }
+
+    private static String hex(CharSequence value) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            sb.append(" 0x").append(Integer.toHexString(value.charAt(i)));
+        }
+        return sb.toString();
     }
 
     private static Http2Headers newHeaders() {

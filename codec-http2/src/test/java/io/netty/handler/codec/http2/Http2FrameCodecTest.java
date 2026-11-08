@@ -940,6 +940,30 @@ public class Http2FrameCodecTest {
         assertInboundStreamFrame(3, new DefaultHttp2PriorityFrame(1, (short) 31, true));
     }
 
+    @Test
+    public void inboundHeadersWithIllegalValuesAreResetByDefault() throws Exception {
+        String[] illegalValues = {"a\r\nTransfer-Encoding: chunked", "a\nb", "a\rb", "a\0b"};
+        int streamId = 1;
+        for (String illegalValue : illegalValues) {
+            // Header values are not validated by the sending side, so the peer can put anything on the wire.
+            Http2Headers malicious = new DefaultHttp2Headers(false)
+                    .method(HttpMethod.GET.asciiName()).scheme(HttpScheme.HTTPS.name())
+                    .authority(new AsciiString("example.org")).path(new AsciiString("/foo"))
+                    .add(new AsciiString("x-injected"), new AsciiString(illegalValue));
+            frameInboundWriter.writeInboundHeaders(streamId, malicious, 0, true);
+
+            // The headers must never reach the application, the stream is reset instead.
+            assertNull(inboundHandler.readInbound());
+            verify(frameWriter).writeRstStream(eqFrameCodecCtx(), eq(streamId),
+                    eq(Http2Error.PROTOCOL_ERROR.code()), anyChannelPromise());
+            streamId += 2;
+        }
+
+        // The connection is still usable for well-formed requests.
+        assertTrue(channel.isActive());
+        writeHeaderAndAssert(streamId);
+    }
+
     private void writeHeaderAndAssert(int streamId) {
         frameInboundWriter.writeInboundHeaders(streamId, request, 31, false);
 

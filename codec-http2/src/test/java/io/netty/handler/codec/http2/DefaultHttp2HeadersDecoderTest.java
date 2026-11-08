@@ -277,6 +277,40 @@ public class DefaultHttp2HeadersDecoderTest {
         }
     }
 
+    @Test
+    public void illegalHeaderValuesMustFailValidationByDefault() throws Exception {
+        for (String illegalValue : new String[] {"fo\no", "fo\ro", "fo\0o", "a\r\nTransfer-Encoding: chunked"}) {
+            verifyValidationFails(new DefaultHttp2HeadersDecoder(),
+                    encode(b(":method"), b("GET"), b("headername"), b(illegalValue)));
+            verifyValidationFails(new DefaultHttp2HeadersDecoder(true),
+                    encode(b(":method"), b("GET"), b("headername"), b(illegalValue)));
+            verifyValidationFails(new DefaultHttp2HeadersDecoder(true, MAX_HEADER_LIST_SIZE),
+                    encode(b(":method"), b("GET"), b("headername"), b(illegalValue)));
+            verifyValidationFails(new DefaultHttp2HeadersDecoder(true, MAX_HEADER_LIST_SIZE, -1),
+                    encode(b(":method"), b("GET"), b("headername"), b(illegalValue)));
+            verifyValidationFails(new DefaultHttp2HeadersDecoder(true, true),
+                    encode(b(":method"), b("GET"), b("headername"), b(illegalValue)));
+        }
+    }
+
+    @Test
+    public void illegalHeaderValuesAreAcceptedWhenValueValidationIsDisabled() throws Exception {
+        DefaultHttp2HeadersDecoder[] decoders = {
+                new DefaultHttp2HeadersDecoder(false),
+                new DefaultHttp2HeadersDecoder(false, MAX_HEADER_LIST_SIZE),
+                new DefaultHttp2HeadersDecoder(true, false)
+        };
+        for (DefaultHttp2HeadersDecoder decoder : decoders) {
+            ByteBuf buf = encode(b(":method"), b("GET"), b("headername"), b("fo\r\no"));
+            try {
+                Http2Headers headers = decoder.decodeHeaders(1, buf);
+                assertEquals("fo\r\no", headers.get("headername").toString());
+            } finally {
+                buf.release();
+            }
+        }
+    }
+
     private static void verifyValidationFails(final DefaultHttp2HeadersDecoder decoder, final ByteBuf buf) {
         try {
             Http2Exception e = assertThrows(Http2Exception.class, new Executable() {

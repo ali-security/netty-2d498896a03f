@@ -334,9 +334,10 @@ public class HpackEncoderTest {
     ) throws Http2Exception {
 
         String headerKey = "some-key";
-        Http2Headers toBeEncodedHeaders = new DefaultHttp2Headers().add(headerKey, actualHeaderValue);
+        // The value intentionally contains control characters, so value validation must be disabled explicitly.
+        Http2Headers toBeEncodedHeaders = new DefaultHttp2Headers(true, false, 16).add(headerKey, actualHeaderValue);
         encoder.encodeHeaders(0, buf, toBeEncodedHeaders, Http2HeadersEncoder.NEVER_SENSITIVE);
-        DefaultHttp2Headers decodedHeaders = new DefaultHttp2Headers();
+        DefaultHttp2Headers decodedHeaders = new DefaultHttp2Headers(true, false, 16);
         hpackDecoder.decode(0, buf, decodedHeaders, true);
         buf.clear();
         String decodedHeaderValue = decodedHeaders.get(headerKey).toString();

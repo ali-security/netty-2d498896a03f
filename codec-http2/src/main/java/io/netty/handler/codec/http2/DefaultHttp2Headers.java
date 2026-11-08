@@ -16,10 +16,13 @@ package io.netty.handler.codec.http2;
 
 import io.netty.handler.codec.CharSequenceValueConverter;
 import io.netty.handler.codec.DefaultHeaders;
+import io.netty.handler.codec.Headers;
 import io.netty.handler.codec.http.HttpHeaderValidationUtil;
 import io.netty.util.AsciiString;
 import io.netty.util.ByteProcessor;
 import io.netty.util.internal.PlatformDependent;
+
+import java.util.Map.Entry;
 
 import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
 import static io.netty.handler.codec.http2.Http2Exception.connectionError;
@@ -82,7 +85,7 @@ public class DefaultHttp2Headers
         }
     };
 
-    private static final ValueValidator<CharSequence> VALUE_VALIDATOR = new ValueValidator<CharSequence>() {
+    static final ValueValidator<CharSequence> VALUE_VALIDATOR = new ValueValidator<CharSequence>() {
         @Override
         public void validate(CharSequence value) {
             int index = HttpHeaderValidationUtil.validateValidHeaderValue(value);
@@ -98,8 +101,8 @@ public class DefaultHttp2Headers
     /**
      * Create a new instance.
      * <p>
-     * Header names will be validated according to
-     * <a href="https://tools.ietf.org/html/rfc7540">rfc7540</a>.
+     * Header names and values will be validated according to
+     * <a href="https://www.rfc-editor.org/rfc/rfc9113.html">RFC 9113</a>.
      */
     public DefaultHttp2Headers() {
         this(true);
@@ -107,8 +110,9 @@ public class DefaultHttp2Headers
 
     /**
      * Create a new instance.
-     * @param validate {@code true} to validate header names according to
-     * <a href="https://tools.ietf.org/html/rfc7540">rfc7540</a>. {@code false} to not validate header names.
+     * @param validate {@code true} to validate header names and values according to
+     * <a href="https://www.rfc-editor.org/rfc/rfc9113.html">RFC 9113</a>.
+     * {@code false} to not validate header names or values.
      */
     @SuppressWarnings("unchecked")
     public DefaultHttp2Headers(boolean validate) {
@@ -116,13 +120,16 @@ public class DefaultHttp2Headers
         // headers.
         super(CASE_SENSITIVE_HASHER,
               CharSequenceValueConverter.INSTANCE,
-              validate ? HTTP2_NAME_VALIDATOR : NameValidator.NOT_NULL);
+              validate ? HTTP2_NAME_VALIDATOR : NameValidator.NOT_NULL,
+              16,
+              validate ? VALUE_VALIDATOR : (ValueValidator<CharSequence>) ValueValidator.NO_VALIDATION);
     }
 
     /**
      * Create a new instance.
-     * @param validate {@code true} to validate header names according to
-     * <a href="https://tools.ietf.org/html/rfc7540">rfc7540</a>. {@code false} to not validate header names.
+     * @param validate {@code true} to validate header names and values according to
+     * <a href="https://www.rfc-editor.org/rfc/rfc9113.html">RFC 9113</a>.
+     * {@code false} to not validate header names or values.
      * @param arraySizeHint A hint as to how large the hash data structure should be.
      * The next positive power of two will be used. An upper bound may be enforced.
      * @see DefaultHttp2Headers#DefaultHttp2Headers(boolean, boolean, int)
@@ -134,7 +141,8 @@ public class DefaultHttp2Headers
         super(CASE_SENSITIVE_HASHER,
               CharSequenceValueConverter.INSTANCE,
               validate ? HTTP2_NAME_VALIDATOR : NameValidator.NOT_NULL,
-              arraySizeHint);
+              arraySizeHint,
+              validate ? VALUE_VALIDATOR : (ValueValidator<CharSequence>) ValueValidator.NO_VALIDATION);
     }
 
     /**
@@ -144,7 +152,7 @@ public class DefaultHttp2Headers
      * @param validateValues {@code true} to validate header values according to
      * <a href="https://datatracker.ietf.org/doc/html/rfc7230#section-3.2">rfc7230</a> and
      * <a href="https://datatracker.ietf.org/doc/html/rfc5234#appendix-B.1">rfc5234</a>. Otherwise, {@code false}
-     * (the default) to not validate values.
+     * to not validate values.
      * @param arraySizeHint A hint as to how large the hash data structure should be.
      * The next positive power of two will be used. An upper bound may be enforced.
      */
@@ -180,6 +188,20 @@ public class DefaultHttp2Headers
                 hasPseudoHeaderFormat(name)) {
             PlatformDependent.throwException(connectionError(
                     PROTOCOL_ERROR, "HTTP/2 pseudo-header '%s' must not be empty.", name));
+        }
+    }
+
+    @Override
+    protected void addImpl(Headers<? extends CharSequence, ? extends CharSequence, ?> headers) {
+        if (valueValidator() == VALUE_VALIDATOR && !(headers instanceof DefaultHttp2Headers &&
+                ((DefaultHttp2Headers) headers).valueValidator() == VALUE_VALIDATOR)) {
+            // The fast copy of DefaultHeaders does not validate values, so copy entry by entry to make sure values
+            // which have not been validated by the source headers are validated before they are added to these.
+            for (Entry<? extends CharSequence, ? extends CharSequence> header : headers) {
+                add(header.getKey(), header.getValue());
+            }
+        } else {
+            super.addImpl(headers);
         }
     }
 

@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class ReadOnlyHttp2HeadersTest {
     @Test
@@ -254,6 +255,46 @@ public class ReadOnlyHttp2HeadersTest {
         assertTrue(itr.hasNext());
         assertTrue(AsciiString.contentEqualsIgnoreCase("value3", itr.next()));
         assertFalse(itr.hasNext());
+    }
+
+    @Test
+    public void illegalValuesAreNotAllowed() {
+        for (String illegalValue : new String[] {"ba\nr", "ba\rr", "ba\0r", "bar\r\nTransfer-Encoding: chunked"}) {
+            AsciiString value = new AsciiString(illegalValue);
+            try {
+                ReadOnlyHttp2Headers.trailers(true, new AsciiString("foo"), value);
+                fail("trailer value accepted");
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+            try {
+                ReadOnlyHttp2Headers.serverHeaders(true, new AsciiString("200"), new AsciiString("foo"), value);
+                fail("header value accepted");
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+            try {
+                ReadOnlyHttp2Headers.serverHeaders(true, value);
+                fail(":status value accepted");
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+            try {
+                ReadOnlyHttp2Headers.clientHeaders(true, new AsciiString("GET"), value,
+                        new AsciiString("https"), new AsciiString("example.org"));
+                fail(":path value accepted");
+            } catch (IllegalArgumentException expected) {
+                // expected
+            }
+        }
+    }
+
+    @Test
+    public void illegalValuesAreAllowedWithoutValidation() {
+        AsciiString value = new AsciiString("ba\r\nr");
+        assertEquals(value, ReadOnlyHttp2Headers.trailers(false, new AsciiString("foo"), value).get("foo"));
+        assertEquals(value, ReadOnlyHttp2Headers.clientHeaders(false, new AsciiString("GET"), value,
+                new AsciiString("https"), new AsciiString("example.org")).path());
     }
 
     private static void testValueIteratorSingleValue(Http2Headers headers, CharSequence name, CharSequence value) {

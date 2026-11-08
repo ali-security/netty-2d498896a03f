@@ -134,6 +134,7 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
         for (int i = 1; i < pseudoHeaders.length; i += 2) {
             // pseudoHeaders names are only set internally so they are assumed to be valid.
             checkNotNullArrayParam(pseudoHeaders[i], i, "pseudoHeaders");
+            VALUE_VALIDATOR.validate(pseudoHeaders[i]);
         }
 
         boolean seenNonPseudoHeader = false;
@@ -148,6 +149,7 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
                      "otherHeaders name at index " + i + " is a pseudo header that appears after non-pseudo headers.");
             }
             checkNotNullArrayParam(otherHeaders[i + 1], i + 1, "otherHeaders");
+            VALUE_VALIDATOR.validate(otherHeaders[i + 1]);
         }
     }
 

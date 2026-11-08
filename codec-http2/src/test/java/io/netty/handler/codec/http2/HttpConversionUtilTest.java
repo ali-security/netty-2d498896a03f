@@ -510,4 +510,32 @@ public class HttpConversionUtilTest {
         assertTrue(httpHeaders.contains(HttpConversionUtil.ExtensionHeaderNames.PATH.text()));
         assertEquals("meow", httpHeaders.get("cat"));
     }
+
+    @Test
+    public void toHttp2HeadersValidatesHeaderValues() {
+        HttpHeaders inHeaders = new DefaultHttpHeaders(false);
+        inHeaders.add("x-injected", "a\r\nTransfer-Encoding: chunked");
+        try {
+            HttpConversionUtil.toHttp2Headers(inHeaders, true);
+            fail();
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("x-injected"), expected.getMessage());
+        }
+        HttpRequest msg = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/", false);
+        msg.headers().add(HOST, "example.org");
+        msg.headers().add(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
+        msg.headers().add("x-valid", "ok");
+        assertEquals("ok", HttpConversionUtil.toHttp2Headers(msg, true).get("x-valid").toString());
+        msg.headers().add("x-injected", "a\nb");
+        try {
+            HttpConversionUtil.toHttp2Headers(msg, true);
+            fail();
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().contains("x-injected"), expected.getMessage());
+        }
+
+        // Without validation the values are converted as they are.
+        Http2Headers out = HttpConversionUtil.toHttp2Headers(inHeaders, false);
+        assertEquals("a\r\nTransfer-Encoding: chunked", out.get("x-injected").toString());
+    }
 }
